@@ -177,7 +177,7 @@ def control_machine():
         heating['last_bhkw_run'] = time.time()
         print("cmp: %f" % history_avg(pow_con['company']['history'], 60))
         print("bhkw1: %f" % history_avg(pow_con['bhkw1']['history'], 60))
-        if history_avg(pow_con['company']['history'], 60) - history_avg(pow_con['bhkw1']['history'], 60) > 1800:
+        if history_avg(pow_con['company']['history'], 60) + history_avg(pow_con['bhkw1']['history'], 60) > 1700:
             next_state = 'BATT_CHARGING'
         else:
             next_state = 'STOP'
@@ -504,6 +504,8 @@ def calculate():
         print("problem with emeter comm")
         return
 
+    print("calculate: last hp run %d ago, last bhkw run %d ago" % (time.time() - heating['last_hp_run'],time.time() - heating['last_bhkw_run']))
+    print("calculate: BattAh = %f" % (mq_battAh['value']))
     if mq_battAh['value'] >= 0 and pow_con['company']['value'] < 0 and heat_state == 'IDLE':
         heat_state = 'START_COMP_TIME'
 
@@ -515,13 +517,15 @@ def calculate():
 
     hp_restart_time = 3*heating['COMP_RUNTIME_SHOT']
     if mq_weather['age'] < 600:
+        print("calculate: outside temp %f" % mq_weather['value'])
         if mq_weather['value'] < 5:
             hp_restart_time = 3*heating['COMP_RUNTIME_SHOT']
         elif mq_weather['value'] < 10:
             hp_restart_time = 2*heating['COMP_RUNTIME_SHOT']
         elif mq_weather['value'] < 15:
             hp_restart_time = heating['COMP_RUNTIME_SHOT']
-
+    else:
+        print("calculate: weather unavailable")
     if time.time() - heating['last_hp_run'] > hp_restart_time:
         do_comp_start()
 
