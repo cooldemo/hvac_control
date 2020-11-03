@@ -112,7 +112,7 @@ def on_message(client, userdata, msg):
             mqtt[msg.topic] = {}
             value = float(msg.payload.decode('utf-8'))
             if value.is_integer():
-                data = int(msg.payload.decode('utf-8'))
+                data = int(value)
             else:
                 data = value
             mqtt[msg.topic]['age'] = time.time()
