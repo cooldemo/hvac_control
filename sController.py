@@ -161,8 +161,10 @@ def publish_data():
 def control_machine():
     global control_state, pow_con, heat_state, heating
     if control_machine.loop_delay > 0:
+        print("control machine: loop_delay " + control_machine.loop_delay)
         control_machine.loop_delay -= 1
         return
+    print("control machine: state " + control_state)
     next_state = 'IDLE'
     if control_state == 'INIT':
         if pow_con['bhkw1']['power'] > 200:
@@ -219,12 +221,15 @@ def heat_machine():
     global control_state, heat_state, heating, heat_pump_command
     mq = read_mqtt('emon/heatpump1/inHot')
     if mq['age'] > 200 and heat_state != 'IDLE':
+        print("heat machine: hp data too old ")
         heat_state = 'IDLE'
         if control_state != 'IDLE':
             control_state = 'STOP'
     if heat_machine.loop_delay > 0:
+        print("heat machine: loop_delay " + heat_machine.loop_delay)
         heat_machine.loop_delay -= 1
         return
+    print("heat machine: heat_state " + heat_state)
     next_state = 'IDLE'
     if heat_state == 'IDLE':
         heat_pump_command['comp'] = 0
