@@ -4,7 +4,7 @@
 # Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
 
 import serial, struct, socketserver, crc16, time
-import paho.mqtt.client as mqtt
+import paho.mqtt.client as mqtt_c
 import re, datetime, random, requests, json
 
 MQTT_TOPIC = 'emon/+/#'
@@ -514,7 +514,7 @@ def calculate():
         do_comp_start()
 
 
-client = mqtt.Client()
+client = mqtt_c.Client()
 client.connect('192.168.0.2', 1883, 60)
 
 if __name__ == '__main__':
