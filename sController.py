@@ -48,7 +48,7 @@ mqtt = {}
 def read_mqtt(topic):
     global mqtt
     if topic not in mqtt:
-        return {'value': 0, 'age': 0}
+        return {'value': 0, 'age': -500000000}
     else:
         return {'value': mqtt[topic]['value'], 'age': (time.time() - mqtt[topic]['age'])}
 
@@ -565,7 +565,7 @@ if __name__ == '__main__':
                 publish_data()
                 save_runtime()
                 calculate()
-
+                print(mqtt)
 
         except Exception as e:
             try:
