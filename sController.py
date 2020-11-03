@@ -458,8 +458,12 @@ def do_start():
     client.publish('emon/controller/request_state', 'START')
 
 def do_comp_start():
-    print('BHKW1 start')
+    print('HP start')
     client.publish('emon/controller/request_state', 'START_COMP')
+
+def do_comp_start_time():
+    print('HP start time')
+    client.publish('emon/controller/request_state', 'START_COMP_TIME')
 
 
 def bhkw1_start():
@@ -488,7 +492,7 @@ def charger1_charging_start():
 
 
 def calculate():
-    global control_state, heat_state
+    global control_state, heat_state, heating
     mq = read_mqtt('emon/heatpump1/boilerBottom')
     if mq['age'] > 200: # problem with heatpump comm
         print("problem with heatpump comm")
@@ -508,7 +512,7 @@ def calculate():
     print("calculate: last hp run %d ago, last bhkw run %d ago" % (time.time() - heating['last_hp_run'],time.time() - heating['last_bhkw_run']))
     print("calculate: BattAh = %f" % (mq_battAh['value']))
     if mq_battAh['value'] >= 0 and pow_con['company']['value'] < 0 and heat_state == 'IDLE':
-        heat_state = 'START_COMP_TIME'
+        do_comp_start_time()
 
     if time.time() - heating['last_bhkw_run'] > heating['BHKW_RESTART_TIME'] and mq_battAh['value'] < -60:
         do_start()
