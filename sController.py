@@ -110,11 +110,14 @@ def on_message(client, userdata, msg):
             control_state = data
         else:
             mqtt[msg.topic] = {}
-            value = float(msg.payload.decode('utf-8'))
-            if value.is_integer():
-                data = int(value)
-            else:
-                data = value
+            try:
+                value = float(msg.payload.decode('utf-8'))
+                if value.is_integer():
+                    data = int(value)
+                else:
+                    data = value
+            except:
+                data = msg.payload.decode('utf-8') # push without conversion
             mqtt[msg.topic]['age'] = time.time()
             mqtt[msg.topic]['value'] = data
 
