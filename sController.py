@@ -564,7 +564,7 @@ if __name__ == '__main__':
                 heat_pump_update()
                 publish_data()
                 save_runtime()
-
+                calculate()
 
 
         except Exception as e:
