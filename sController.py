@@ -234,6 +234,7 @@ def heat_machine():
         heat_machine.loop_delay -= 1
         return
     print("heat machine: heat_state " + heat_state)
+    print("heat machine: inHot: %f, boilerBottom: %f" % (read_mqtt('emon/heatpump1/inHot')['value'], read_mqtt('emon/heatpump1/boilerBottom')['value']))
     next_state = 'IDLE'
     if heat_state == 'IDLE':
         heat_pump_command['comp'] = 0
@@ -565,7 +566,7 @@ if __name__ == '__main__':
                 publish_data()
                 save_runtime()
                 calculate()
-                print(mqtt)
+#                print(mqtt)
 
         except Exception as e:
             try:
