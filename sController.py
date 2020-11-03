@@ -175,8 +175,8 @@ def control_machine():
             next_state = 'IDLE'
     elif control_state == 'BATT_CHARGING':
         heating['last_bhkw_run'] = time.time()
-        print("cmp: " + history_avg(pow_con['company']['history'], 60))
-        print("bhkw1: " + history_avg(pow_con['bhkw1']['history'], 60))
+        print("cmp: %f" % history_avg(pow_con['company']['history'], 60))
+        print("bhkw1: %f" % history_avg(pow_con['bhkw1']['history'], 60))
         if history_avg(pow_con['company']['history'], 60) - history_avg(pow_con['bhkw1']['history'], 60) > 1800:
             next_state = 'BATT_CHARGING'
         else:
