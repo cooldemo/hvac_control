@@ -18,6 +18,7 @@ pow_con['bhkw1'] = {}
 pow_con['bhkw1']['enabled'] = False
 pow_con['bhkw1']['history'] = []
 pow_con['bhkw1']['request_power'] = 0
+pow_con['bhkw1']['power'] = 0
 pow_con['bhkw1']['warmup'] = 0
 pow_con['bhkw1']['coolant'] = 0
 pow_con['bhkw2'] = {}
@@ -95,6 +96,7 @@ def on_message(client, userdata, msg):
             data = int(msg.payload.decode('utf-8'))
             if data == 0:
                 pow_con['bhkw1']['enabled'] = False
+                pow_con['bhkw1']['request_power'] = 0
             else:
                 if data > 1700:
                     pow_con['bhkw1']['enabled'] = True
@@ -161,7 +163,7 @@ def publish_data():
 def control_machine():
     global control_state, pow_con, heat_state, heating
     if control_machine.loop_delay > 0:
-        print("control machine: loop_delay " + control_machine.loop_delay)
+        print("control machine: loop_delay %d" % control_machine.loop_delay)
         control_machine.loop_delay -= 1
         return
     print("control machine: state " + control_state)
@@ -205,15 +207,17 @@ def control_machine():
             heat_state = 'IDLE'
             solar1_charging_stop()
     elif control_state == 'STARTING':
-        if pow_con['bhkw1']['power'] > 0:
+        if pow_con['bhkw1']['power'] < 0:
             next_state = 'BATT_CHARGING'
             solar1_charging_start()
+            control_machine.loop_delay = 2
         else:
             next_state = 'STARTING'
     elif control_state == 'IDLE':
         next_state = 'IDLE'
     else:
         print("Invalid control machine state:" + control_state)
+        next_state = 'INIT'
     control_state = next_state
     return
 
@@ -513,9 +517,11 @@ def calculate():
     print("calculate: BattAh = %f" % (mq_battAh['value']))
     if mq_battAh['value'] >= 0 and pow_con['company']['value'] < 0 and heat_state == 'IDLE':
         do_comp_start_time()
+        return
 
-    if time.time() - heating['last_bhkw_run'] > heating['BHKW_RESTART_TIME'] and mq_battAh['value'] < -60:
+    if time.time() - heating['last_bhkw_run'] > heating['BHKW_RESTART_TIME'] and time.time() - heating['last_hp_run'] > heating['BHKW_RESTART_TIME'] and mq_battAh['value'] < -60:
         do_start()
+        return
 
     if heat_state != 'IDLE':
         return
@@ -531,8 +537,9 @@ def calculate():
             hp_restart_time = heating['COMP_RUNTIME_SHOT']
     else:
         print("calculate: weather unavailable")
-    if time.time() - heating['last_hp_run'] > hp_restart_time:
+    if time.time() - heating['last_hp_run'] > hp_restart_time and time.time() - heating['last_bhkw_run'] > hp_restart_time:
         do_comp_start()
+        return
 
 
 client = mqtt_c.Client()
@@ -543,6 +550,7 @@ if __name__ == '__main__':
     client.on_message = on_message
     client.loop_start()
     time.sleep(10)
+    pow_con['bhkw1']['request_power'] = -pow_con['bhkw1']['power']
     while True:
         try:
             time.sleep(10)
@@ -563,13 +571,13 @@ if __name__ == '__main__':
             else:
                 if total > 100:
                     decConsum(total - 100)
-                client.publish('emon/bhkw1/request_power', str(int(pow_con['bhkw1']['request_power'])))
-                control_machine()
-                heat_machine()
-                heat_pump_update()
-                publish_data()
-                save_runtime()
-                calculate()
+            client.publish('emon/bhkw1/request_power', str(int(pow_con['bhkw1']['request_power'])))
+            control_machine()
+            heat_machine()
+            heat_pump_update()
+            publish_data()
+            save_runtime()
+            calculate()
 #                print(mqtt)
 
         except Exception as e:
