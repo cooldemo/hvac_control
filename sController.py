@@ -20,6 +20,7 @@ pow_con['bhkw1']['history'] = []
 pow_con['bhkw1']['request_power'] = 0
 pow_con['bhkw1']['power'] = 0
 pow_con['bhkw1']['warmup'] = 0
+pow_con['bhkw1']['rpm'] = 0
 pow_con['bhkw1']['coolant'] = 0
 pow_con['bhkw2'] = {}
 pow_con['solar'] = {}
@@ -27,8 +28,8 @@ pow_con['company'] = {}
 pow_con['company']['history'] = []
 
 heating = {}
-heating['last_bhkw_run'] = 0
-heating['last_hp_run'] = 0
+heating['last_bhkw_run'] = 0.0
+heating['last_hp_run'] = 0.0
 heating['WATER_TEMP1'] = 39.0
 heating['WATER_TEMP1a'] = 45.0
 heating['WATER_TEMP2'] = 49.0
@@ -92,6 +93,9 @@ def on_message(client, userdata, msg):
         elif re.search('emon/bhkw1/coolant', msg.topic):
             data = float(msg.payload.decode('utf-8'))
             pow_con['bhkw1']['coolant'] = data
+        elif re.search('emon/bhkw1/rpm_actual', msg.topic):
+            data = float(msg.payload.decode('utf-8'))
+            pow_con['bhkw1']['rpm'] = data
         elif re.search('emon/bhkw1/request_power', msg.topic):
             data = int(msg.payload.decode('utf-8'))
             if data == 0:
@@ -177,8 +181,8 @@ def control_machine():
             next_state = 'IDLE'
     elif control_state == 'BATT_CHARGING':
         heating['last_bhkw_run'] = time.time()
-        print("cmp: %f" % history_avg(pow_con['company']['history'], 60))
-        print("bhkw1: %f" % history_avg(pow_con['bhkw1']['history'], 60))
+#        print("cmp: %f" % history_avg(pow_con['company']['history'], 60))
+#        print("bhkw1: %f" % history_avg(pow_con['bhkw1']['history'], 60))
         if history_avg(pow_con['company']['history'], 60) + history_avg(pow_con['bhkw1']['history'], 60) > 1700:
             next_state = 'BATT_CHARGING'
         else:
@@ -200,7 +204,7 @@ def control_machine():
         bhkw1_stop()
         next_state = 'STOPING'
     elif control_state == 'STOPING':
-        if pow_con['bhkw1']['power'] > 0:
+        if pow_con['bhkw1']['power'] < 0:
             next_state = 'STOPING'
         else:
             next_state = 'IDLE'
@@ -208,11 +212,16 @@ def control_machine():
             solar1_charging_stop()
     elif control_state == 'STARTING':
         if pow_con['bhkw1']['power'] < 0:
-            next_state = 'BATT_CHARGING'
+            next_state = 'STARTING_WAIT'
+            control_machine.loop_delay = 1
             solar1_charging_start()
-            control_machine.loop_delay = 2
         else:
             next_state = 'STARTING'
+    elif control_state == 'STARTING_WAIT':
+        if pow_con['bhkw1']['coolant'] > 51 and (pow_con['bhkw1']['rpm'] < 2030 or pow_con['bhkw1']['rpm'] > 2070):
+            next_state = 'BATT_CHARGING'
+        else:
+            next_state = 'STARTING_WAIT'
     elif control_state == 'IDLE':
         next_state = 'IDLE'
     else:
@@ -234,7 +243,7 @@ def heat_machine():
         if control_state != 'IDLE':
             control_state = 'STOP'
     if heat_machine.loop_delay > 0:
-        print("heat machine: loop_delay " + heat_machine.loop_delay)
+        print("heat machine: loop_delay %d" % heat_machine.loop_delay)
         heat_machine.loop_delay -= 1
         return
     print("heat machine: heat_state " + heat_state)
@@ -254,7 +263,12 @@ def heat_machine():
             next_state = 'WATER_HEATING1'
         else:
             next_state = 'HEATING'
+            heat_machine.loop_delay = 10
     elif heat_state == 'START_COMP':
+        heat_pump_command['comp'] = 1
+        heat_pump_command['pump'] = 1
+        heat_pump_command['valve'] = 0
+        heat_machine.loop_delay = 10
         next_state = 'HEATING_COMP'
     elif heat_state == 'START_COMP_TIME':
         heat_machine.compressor_runtime = time.time() + 2500
@@ -276,11 +290,12 @@ def heat_machine():
         heat_pump_command['comp'] = 1
         heat_pump_command['pump'] = 1
         heat_pump_command['valve'] = 0
-        if heat_machine.compressor_runtime > time.time():
+        if heat_machine.compressor_runtime < time.time():
             next_state = 'IDLE'
             heat_machine.compressor_runtime = 0
         else:
-            next_state = 'HEATING_COMP'
+            print("heat machine: comp runtime left %d " % heat_machine.compressor_runtime - time.time())
+            next_state = 'HEATING_COMP_TIME'
 
     elif heat_state == 'HEATING':
         heat_pump_command['comp'] = 0
@@ -298,6 +313,8 @@ def heat_machine():
             control_state = 'STOP'
             if heating['hp_coef'] > -2.0:
                 heating['hp_coef'] -= 0.2
+        else:
+            next_state = 'HEATING'
     elif heat_state == 'WATER_HEATING1':
         heat_pump_command['comp'] = 0
         heat_pump_command['pump'] = 1
@@ -306,7 +323,7 @@ def heat_machine():
         if mq['age'] > 200 or mq['value'] > heating['WATER_TEMP1']:
             next_state = 'HEATING'
             heat_pump_command['valve'] = 0
-            heat_machine.loop_delay = 400
+            heat_machine.loop_delay = 40
         else:
             next_state = 'WATER_HEATING1'
     elif heat_state == 'WATER_HEATING2':
@@ -317,7 +334,7 @@ def heat_machine():
         if mq['age'] > 200 or mq['value'] > heating['WATER_TEMP2']:
             next_state = 'HEATING'
             heat_pump_command['valve'] = 0
-            heat_machine.loop_delay = 400
+            heat_machine.loop_delay = 40
         else:
             next_state = 'WATER_HEATING2'
 
@@ -349,14 +366,15 @@ heat_pump_update.retry_count = 0
 
 
 def save_runtime():
+    global heating
     with open('runtime.json', 'w') as (fp):
         json.dump(heating, fp)
 
 
 def restore_runtime():
+    global heating
     with open('runtime.json') as (fp):
         heating = json.load(fp)
-
 
 # def consumerOn():
 #     availConsumers = []
@@ -519,22 +537,24 @@ def calculate():
         do_comp_start_time()
         return
 
-    if time.time() - heating['last_bhkw_run'] > heating['BHKW_RESTART_TIME'] and time.time() - heating['last_hp_run'] > heating['BHKW_RESTART_TIME'] and mq_battAh['value'] < -60:
+    if time.time() - heating['last_bhkw_run'] > heating['BHKW_RESTART_TIME'] and time.time() - heating['last_hp_run'] > 1000 and mq_battAh['value'] < -60:
         do_start()
         return
 
     if heat_state != 'IDLE':
         return
 
-    hp_restart_time = 3*heating['COMP_RUNTIME_SHOT']
+    hp_restart_time = 4*heating['COMP_RUNTIME_SHOT']
     if mq_weather['age'] < 600:
         print("calculate: outside temp %f" % mq_weather['value'])
-        if mq_weather['value'] < 5:
-            hp_restart_time = 3*heating['COMP_RUNTIME_SHOT']
+        if mq_weather['value'] < -5:
+            hp_restart_time = heating['COMP_RUNTIME_SHOT']/2
+        elif mq_weather['value'] < 5:
+            hp_restart_time = heating['COMP_RUNTIME_SHOT']
         elif mq_weather['value'] < 10:
             hp_restart_time = 2*heating['COMP_RUNTIME_SHOT']
         elif mq_weather['value'] < 15:
-            hp_restart_time = heating['COMP_RUNTIME_SHOT']
+            hp_restart_time = 3*heating['COMP_RUNTIME_SHOT']
     else:
         print("calculate: weather unavailable")
     if time.time() - heating['last_hp_run'] > hp_restart_time and time.time() - heating['last_bhkw_run'] > hp_restart_time:
@@ -549,6 +569,7 @@ if __name__ == '__main__':
     client.on_connect = on_connect
     client.on_message = on_message
     client.loop_start()
+    restore_runtime()
     time.sleep(10)
     pow_con['bhkw1']['request_power'] = -pow_con['bhkw1']['power']
     while True:
