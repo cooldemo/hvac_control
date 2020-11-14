@@ -522,7 +522,9 @@ def charger1_charging_start():
 
 def heatpower_compensation():
 
-    heating['heatpower_compensation'] = 1.2 * history_avg(pow_con['bhkw1']['history'], 900) / 2200
+    heating['heatpower_compensation'] = 0.8 * history_avg(pow_con['bhkw1']['history'], 900) / 2200
+    if heating['heatpower_compensation'] < 0.0:
+        heating['heatpower_compensation'] = 0.0
 
 
 
