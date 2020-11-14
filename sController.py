@@ -33,7 +33,7 @@ heating['last_hp_run'] = 0.0
 heating['WATER_TEMP1'] = 39.0
 heating['WATER_TEMP1a'] = 45.0
 heating['WATER_TEMP2'] = 49.0
-heating['HEATING_TARGET'] = 27
+heating['HEATING_TARGET'] = 28
 heating['COMP_RUNTIME_SHOT'] = 3600
 heating['BHKW_RESTART_TIME'] = 14400
 heating['hp_coef'] = -1.0
@@ -162,6 +162,8 @@ def publish_data():
     client.publish(MQTT_MYTOPIC + 'heat_state', heat_state)
     client.publish(MQTT_MYTOPIC + 'request_start', 0)
     client.publish(MQTT_MYTOPIC + 'request_stop', 0)
+    for key, value in heating.items():
+        client.publish(MQTT_MYTOPIC + 'heating_'+key, value)
 
 
 def control_machine():
