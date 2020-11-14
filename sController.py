@@ -116,7 +116,8 @@ def on_message(client, userdata, msg):
             data = msg.payload.decode('utf-8')
             control_state = data
         else:
-            mqtt[msg.topic] = {}
+            if msg.topic not in mqtt:
+                mqtt[msg.topic] = {}
             try:
                 value = float(msg.payload.decode('utf-8'))
                 if value.is_integer():
