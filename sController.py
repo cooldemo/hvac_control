@@ -543,6 +543,13 @@ def calculate():
     if time.time() - pow_con['company']['age'] > 60:
         print("problem with emeter comm")
         return
+    try:
+        avg_consumption = history_avg(mqtt['emon/solar1/AOactpo_realtime']['history'], 600)
+        print("calculate: avg power usage: %.0f" % avg_consumption)
+    except:
+        print("calculate: AOactpo unavailable")
+        avg_consumption = 0
+        pass
 
     print("calculate: last hp run %d ago, last bhkw run %d ago" % (time.time() - heating['last_hp_run'],time.time() - heating['last_bhkw_run']))
     print("calculate: BattAh = %f" % (mq_battAh['value']))
@@ -571,14 +578,10 @@ def calculate():
     else:
         print("calculate: weather unavailable")
     if time.time() - heating['last_hp_run'] > hp_restart_time and time.time() - heating['last_bhkw_run'] > hp_restart_time:
-        try:
-            pwr = history_avg(mqtt['emon/solar1/AOactpo_realtime']['history'], 600)
-            if pwr > 1500:
-                print("calculate: power usage higher than limit %f. Heatpump start delayed." % pwr)
-                return
-        except:
-            print("calculate: AOactpo unavailable")
-            pass
+        avg_consumption = history_avg(mqtt['emon/solar1/AOactpo_realtime']['history'], 600)
+        if  avg_consumption > 1500:
+            print("calculate: power usage higher than limit %.0f. Heatpump start delayed." % avg_consumption)
+            return
         do_comp_start()
         return
 
