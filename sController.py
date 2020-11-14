@@ -112,14 +112,6 @@ def on_message(client, userdata, msg):
             pow_con['company']['age'] = time.time()
             pow_con['company']['history'].append((data, time.time()))
             history_cleanup(pow_con['company']['history'])
-        elif re.search('emon/solar1/AOactpo_realtime', msg.topic):
-            data = float(msg.payload.decode('utf-8'))
-            pow_con['company']['power'] = data
-            pow_con['company']['age'] = time.time()
-            pow_con['company']['history'].append((data, time.time()))
-            history_cleanup(pow_con['company']['history'])
-            mqtt[msg.topic]['age'] = time.time()
-            mqtt[msg.topic]['value'] = data
         elif re.search(MQTT_MYTOPIC + 'request_state', msg.topic):
             data = msg.payload.decode('utf-8')
             control_state = data
