@@ -37,6 +37,7 @@ heating['HEATING_TARGET'] = 28
 heating['COMP_RUNTIME_SHOT'] = 3600
 heating['BHKW_RESTART_TIME'] = 14400
 heating['hp_coef'] = -1.0
+heating['heatpower_compensation'] = 0.0
 
 consumers = [
     'sonoff1', 'sonoff2']
@@ -111,6 +112,14 @@ def on_message(client, userdata, msg):
             pow_con['company']['age'] = time.time()
             pow_con['company']['history'].append((data, time.time()))
             history_cleanup(pow_con['company']['history'])
+        elif re.search('emon/solar1/AOactpo_realtime', msg.topic):
+            data = float(msg.payload.decode('utf-8'))
+            pow_con['company']['power'] = data
+            pow_con['company']['age'] = time.time()
+            pow_con['company']['history'].append((data, time.time()))
+            history_cleanup(pow_con['company']['history'])
+            mqtt[msg.topic]['age'] = time.time()
+            mqtt[msg.topic]['value'] = data
         elif re.search(MQTT_MYTOPIC + 'request_state', msg.topic):
             data = msg.payload.decode('utf-8')
             control_state = data
@@ -126,6 +135,10 @@ def on_message(client, userdata, msg):
                 data = msg.payload.decode('utf-8') # push without conversion
             mqtt[msg.topic]['age'] = time.time()
             mqtt[msg.topic]['value'] = data
+            if 'history' not in mqtt[msg.topic]:
+                mqtt[msg.topic]['history'] = []
+            mqtt[msg.topic]['history'].append((data, time.time()))
+            history_cleanup(mqtt[msg.topic]['history'])
 
 
 def history_cleanup(hst):
@@ -310,7 +323,7 @@ def heat_machine():
             control_state = 'STOP'
         elif mq['value'] > heating['HEATING_TARGET'] - 1 and mq1['value'] < heating['WATER_TEMP1a']:
             next_state = 'WATER_HEATING2'
-        elif mq['value'] > heating['HEATING_TARGET']:
+        elif mq['value'] > heating['HEATING_TARGET'] + heating['heatpower_compensation']:
             next_state = 'IDLE'
             control_state = 'STOP'
             if heating['hp_coef'] > -2.0:
@@ -514,6 +527,11 @@ def charger1_charging_start():
     print('charger1 charging start')
     client.publish('emon/chargerType1/rapi/in/$FE')
 
+def heatpower_compensation():
+
+    heating['heatpower_compensation'] = 1.2 * history_avg(pow_con['bhkw1']['history'], 900) / 2200
+
+
 
 def calculate():
     global control_state, heat_state, heating
@@ -560,6 +578,14 @@ def calculate():
     else:
         print("calculate: weather unavailable")
     if time.time() - heating['last_hp_run'] > hp_restart_time and time.time() - heating['last_bhkw_run'] > hp_restart_time:
+        try:
+            pwr = history_avg(mqtt['emon/solar1/AOactpo_realtime']['history'], 600)
+            if pwr > 1500:
+                print("calculate: power usage higher than limit %f. Heatpump start delayed." % pwr)
+                return
+        except:
+            print("calculate: AOactpo unavailable")
+            pass
         do_comp_start()
         return
 
@@ -600,6 +626,7 @@ if __name__ == '__main__':
             heat_pump_update()
             publish_data()
             save_runtime()
+            heatpower_compensation()
             calculate()
 #                print(mqtt)
 
