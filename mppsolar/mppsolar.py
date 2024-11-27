@@ -279,7 +279,7 @@ b'ID'
 
 
 
-#print splitMsg(set("MPPTLV3000"))
+#print (splitMsg(set(b'MPPTLV4150')))
 #print splitMsg(query("MPPTV"))
 #print splitMsg(set("GPMP001000"))
 print (splitMsg(query(b'T')))
@@ -309,7 +309,7 @@ mqttc = mqtt.Client()
 mqttc.on_connect = on_connect
 mqttc.on_message = on_message
 
-mqttc.connect("192.168.0.2", 1883, 60)
+mqttc.connect("localhost", 1883, 60)
 
 mqttc.loop_start()
 

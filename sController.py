@@ -5,11 +5,17 @@
 
 import serial, struct, socketserver, crc16, time
 import paho.mqtt.client as mqtt_c
-import re, datetime, random, requests, json
+import re, datetime, random, requests, json, math, traceback
+import pysolar.solar
 
 MQTT_TOPIC = 'emon/+/#'
 MQTT_MYTOPIC = 'emon/controller/'
 MQTT_WEATHER = 'weather/#'
+
+
+latitude = 48.00
+longitude = 18.00
+
 
 pow_con = {}
 pow_con['sonoff1'] = {}
@@ -26,6 +32,7 @@ pow_con['bhkw2'] = {}
 pow_con['solar'] = {}
 pow_con['company'] = {}
 pow_con['company']['history'] = []
+pow_con['company']['age'] = 0
 
 heating = {}
 heating['last_bhkw_run'] = 0.0
@@ -38,6 +45,8 @@ heating['COMP_RUNTIME_SHOT'] = 3600
 heating['BHKW_RESTART_TIME'] = 14400
 heating['hp_coef'] = -1.0
 heating['heatpower_compensation'] = 0.0
+heating['INTEMP_TARGET'] = 20.5
+heating['disabled'] = 0
 
 consumers = [
     'sonoff1', 'sonoff2']
@@ -54,6 +63,13 @@ def read_mqtt(topic):
         return {'value': 0, 'age': -500000000}
     else:
         return {'value': mqtt[topic]['value'], 'age': (time.time() - mqtt[topic]['age'])}
+
+def read_mqtt_avg(topic, interval):
+    global mqtt
+    if topic not in mqtt:
+        return float('nan')
+    else:
+        return history_avg(mqtt[topic]['history'], interval)
 
 
 heat_pump_command = {}
@@ -115,6 +131,11 @@ def on_message(client, userdata, msg):
         elif re.search(MQTT_MYTOPIC + 'request_state', msg.topic):
             data = msg.payload.decode('utf-8')
             control_state = data
+        elif re.search(MQTT_MYTOPIC + 'heating_', msg.topic):
+            data = msg.payload.decode('utf-8')
+            topic = re.split(MQTT_MYTOPIC + 'heating_', msg.topic)
+            if len(topic) == 2:
+                heating[topic[1]] = float(msg.payload.decode('utf-8'))
         else:
             if msg.topic not in mqtt:
                 mqtt[msg.topic] = {}
@@ -137,7 +158,7 @@ def on_message(client, userdata, msg):
 def history_cleanup(hst):
     curr_time = time.time()
     for data in hst[:]:
-        if curr_time > data[1] + 3600:
+        if curr_time > data[1] + 86400:
             hst.remove(data)
 
 
@@ -154,6 +175,34 @@ def history_avg(hst, interval):
         return avg / avg_c
     return 0
 
+def history_max(hst, interval):
+    curr_time = time.time()
+    maxim = -999999
+    cnt = 0.0
+    for data in hst:
+        if curr_time < data[1] + interval:
+            if data[0] > maxim:
+                maxim = data[0]
+            cnt += 1
+
+    if cnt > 0:
+        return maxim
+    return 0
+
+def history_min(hst, interval):
+    curr_time = time.time()
+    minim = 999999
+    cnt = 0.0
+    for data in hst:
+        if curr_time < data[1] + interval:
+            if data[0] < minim:
+                minim = data[0]
+            cnt += 1
+
+    if cnt > 0:
+        return minim
+    return 0
+
 
 def publish_data():
     global client
@@ -164,6 +213,8 @@ def publish_data():
     client.publish(MQTT_MYTOPIC + 'company_avg1', history_avg(pow_con['company']['history'], 60))
     client.publish(MQTT_MYTOPIC + 'company_avg5', history_avg(pow_con['company']['history'], 300))
     client.publish(MQTT_MYTOPIC + 'company_avg15', history_avg(pow_con['company']['history'], 1500))
+    client.publish(MQTT_MYTOPIC + 'company_max15', history_max(pow_con['company']['history'], 1500))
+    client.publish(MQTT_MYTOPIC + 'company_min15', history_min(pow_con['company']['history'], 1500))
     client.publish(MQTT_MYTOPIC + 'state', control_state)
     client.publish(MQTT_MYTOPIC + 'heat_state', heat_state)
     client.publish(MQTT_MYTOPIC + 'request_start', 0)
@@ -181,12 +232,22 @@ def control_machine():
     print("control machine: state " + control_state)
     next_state = 'IDLE'
     if control_state == 'INIT':
-        if pow_con['bhkw1']['power'] < -200:
+        if pow_con['bhkw1']['power'] < -1500:
             pow_con['bhkw1']['enabled'] = True
             next_state = 'BATT_CHARGING'
             heat_state = 'START'
         else:
             next_state = 'IDLE'
+    elif control_state == 'BATT_NOTCHARGING':
+        heating['last_bhkw_run'] = time.time()
+#        print("cmp: %f" % history_avg(pow_con['company']['history'], 60))
+#        print("bhkw1: %f" % history_avg(pow_con['bhkw1']['history'], 60))
+        if history_max(pow_con['company']['history'], 30) > 0:
+            next_state = 'BATT_NOTCHARGING'
+        else:
+            next_state = 'BATT_CHARGING'
+            solar1_charging_start()
+            print("BATT_CHARGING reason: consumption lowered")
     elif control_state == 'BATT_CHARGING':
         heating['last_bhkw_run'] = time.time()
 #        print("cmp: %f" % history_avg(pow_con['company']['history'], 60))
@@ -195,6 +256,7 @@ def control_machine():
             next_state = 'BATT_CHARGING'
         else:
             next_state = 'STOP'
+            print("STOP reason: battery full")
             if heating['hp_coef'] < 1.0:
                 heating['hp_coef'] += 0.1
 
@@ -211,30 +273,44 @@ def control_machine():
     elif control_state == 'STOP':
         bhkw1_stop()
         next_state = 'STOPING'
+        heat_state = 'BHKW_COOLDOWN'
     elif control_state == 'STOPING':
         if pow_con['bhkw1']['power'] < 0:
             next_state = 'STOPING'
+            heat_state = 'BHKW_COOLDOWN'
         else:
             next_state = 'IDLE'
-            heat_state = 'IDLE'
             solar1_charging_stop()
     elif control_state == 'STARTING':
         if pow_con['bhkw1']['power'] < 0:
-            next_state = 'STARTING_WAIT'
-            control_machine.loop_delay = 1
-            solar1_charging_start()
+            if history_min(pow_con['company']['history'], 900) > 2200:
+                next_state = 'STARTING_WAIT_NOTCHARGING'
+                control_machine.loop_delay = 1
+            else:
+                next_state = 'STARTING_WAIT'
+                control_machine.loop_delay = 1
+                solar1_charging_start()
         else:
             next_state = 'STARTING'
     elif control_state == 'STARTING_WAIT':
-        if pow_con['bhkw1']['coolant'] > 51 and (pow_con['bhkw1']['rpm'] < 2030 or pow_con['bhkw1']['rpm'] > 2070):
+        heating['last_bhkw_run'] = time.time()
+        if pow_con['bhkw1']['coolant'] > 55 and (pow_con['bhkw1']['rpm'] < 2030 or pow_con['bhkw1']['rpm'] > 2070):
             next_state = 'BATT_CHARGING'
         else:
             next_state = 'STARTING_WAIT'
+    elif control_state == 'STARTING_WAIT_NOTCHARGING':
+        heating['last_bhkw_run'] = time.time()
+        if pow_con['bhkw1']['coolant'] > 55 and (pow_con['bhkw1']['rpm'] < 2030 or pow_con['bhkw1']['rpm'] > 2070):
+            next_state = 'BATT_NOTCHARGING'
+        else:
+            next_state = 'STARTING_WAIT_NOTCHARGING'
     elif control_state == 'IDLE':
         next_state = 'IDLE'
+#        heat_state = 'IDLE'
     else:
         print("Invalid control machine state:" + control_state)
         next_state = 'INIT'
+    print("control machine: next_state", next_state)
     control_state = next_state
     return
 
@@ -279,6 +355,7 @@ def heat_machine():
             heat_pump_command['valve'] = 0
             heat_machine.loop_delay = 10
     elif heat_state == 'START_COMP':
+        heating['last_hp_run'] = time.time()
         heat_pump_command['comp'] = 1
         heat_pump_command['pump'] = 1
         heat_pump_command['valve'] = 0
@@ -304,11 +381,14 @@ def heat_machine():
         heat_pump_command['comp'] = 1
         heat_pump_command['pump'] = 1
         heat_pump_command['valve'] = 0
+
+        if pow_con['company']['power'] < -200:
+            heat_machine.compressor_runtime = time.time() + 2500
         if heat_machine.compressor_runtime < time.time():
             next_state = 'IDLE'
             heat_machine.compressor_runtime = 0
         else:
-            print("heat machine: comp runtime left %d " % heat_machine.compressor_runtime - time.time())
+            print("heat machine: comp runtime left %.0f " % (heat_machine.compressor_runtime - time.time()))
             next_state = 'HEATING_COMP_TIME'
 
     elif heat_state == 'HEATING':
@@ -319,12 +399,14 @@ def heat_machine():
         mq1 = read_mqtt('emon/heatpump1/boilerBottom')
         if mq['age'] > 200 :
             next_state = 'IDLE'
+            print("STOP reason: heatpump timeout")
             control_state = 'STOP'
         elif mq['value'] > heating['HEATING_TARGET'] - 1 and mq1['value'] < heating['WATER_TEMP1a']:
             next_state = 'WATER_HEATING2'
         elif mq['value'] > heating['HEATING_TARGET'] + heating['heatpower_compensation']:
             next_state = 'IDLE'
             control_state = 'STOP'
+            print("STOP reason: heating finished")
             if heating['hp_coef'] > -2.0:
                 heating['hp_coef'] -= 0.2
         else:
@@ -335,23 +417,39 @@ def heat_machine():
         heat_pump_command['valve'] = 1
         mq = read_mqtt('emon/heatpump1/boilerBottom')
         if mq['age'] > 200 or mq['value'] > heating['WATER_TEMP1']:
-            next_state = 'HEATING'
-            heat_pump_command['valve'] = 0
-            heat_machine.loop_delay = 40
+            if int(heating['disabled']) == 1:
+                next_state = 'WATER_HEATING2'
+                print("heat machine: heating disabled")
+            else:
+                next_state = 'HEATING'
+                heat_pump_command['valve'] = 0
+                heat_machine.loop_delay = 40
         else:
             next_state = 'WATER_HEATING1'
+    elif heat_state == 'BHKW_COOLDOWN':
+        heat_pump_command['comp'] = 0
+        heat_pump_command['pump'] = 1
+        heat_pump_command['valve'] = 1
+        next_state = 'IDLE'
+        heat_machine.loop_delay = 60
     elif heat_state == 'WATER_HEATING2':
         heat_pump_command['comp'] = 0
         heat_pump_command['pump'] = 1
         heat_pump_command['valve'] = 1
         mq = read_mqtt('emon/heatpump1/boilerBottom')
         if mq['age'] > 200 or mq['value'] > heating['WATER_TEMP2']:
-            next_state = 'HEATING'
-            heat_pump_command['valve'] = 0
-            heat_machine.loop_delay = 40
+            if int(heating['disabled']) == 1:
+                next_state = 'BHKW_COOLDOWN'
+                control_state = 'STOP'
+                print("heat machine: heating disabled, STOPPING")
+            else:
+                next_state = 'HEATING'
+                heat_pump_command['valve'] = 0
+                heat_machine.loop_delay = 40
         else:
             next_state = 'WATER_HEATING2'
 
+    print("heat machine: next_state", next_state)
     heat_state = next_state
     return
 
@@ -532,7 +630,34 @@ def heatpower_compensation():
     if heating['heatpower_compensation'] < 0.0:
         heating['heatpower_compensation'] = 0.0
 
+PID_MAX_I = 40.0
 
+
+def calculate_hourly():
+    global control_state, heat_state, heating
+    print("Calculate_hourly")
+    mq_inTemp = read_mqtt_avg('weather/inTemp_C', 3600)
+    print("inTemp avg = %f" % mq_inTemp)
+    if not math.isnan(mq_inTemp):
+        calculate_hourly.pid_i += heating['INTEMP_TARGET'] - mq_inTemp
+        if calculate_hourly.pid_i > PID_MAX_I:
+            calculate_hourly.pid_i = PID_MAX_I
+        elif calculate_hourly.pid_i < -PID_MAX_I:
+            calculate_hourly.pid_i = -PID_MAX_I
+        print("pid_i = %f" % calculate_hourly.pid_i)
+        heating['HEATING_TARGET'] += calculate_hourly.pid_i * 0.0125 / 24.0
+        if mq_inTemp > heating['INTEMP_TARGET'] + 0.2:
+            heating['HEATING_TARGET'] -= 0.25 / 24.0
+            print("decreasing HEATING_TARGET to = %f" % heating['HEATING_TARGET'])
+        elif mq_inTemp < heating['INTEMP_TARGET'] - 0.2:
+            heating['HEATING_TARGET'] += 0.25 / 24.0
+            print("increasing HEATING_TARGET to = %f" % heating['HEATING_TARGET'])
+        if heating['HEATING_TARGET'] > 28.0:
+            heating['HEATING_TARGET'] = 28.0
+        elif heating['HEATING_TARGET'] < 19.0:
+            heating['HEATING_TARGET'] = 19.0
+
+calculate_hourly.pid_i=0
 
 def calculate():
     global control_state, heat_state, heating
@@ -544,7 +669,9 @@ def calculate():
         return
 
     mq_weather = read_mqtt('weather/outTemp_C')
+    mq_tempIn = read_mqtt('weather/inTemp_C')
     mq_battAh = read_mqtt('emon/solar1/AhBatt')
+    mq_battCurr = read_mqtt('emon/solar1/BATcurr_realtime')
     if mq_battAh['age'] > 200: # problem with solar comm
         print("problem with solar comm")
         return
@@ -561,41 +688,72 @@ def calculate():
 
     print("calculate: last hp run %d ago, last bhkw run %d ago" % (time.time() - heating['last_hp_run'],time.time() - heating['last_bhkw_run']))
     print("calculate: BattAh = %f" % (mq_battAh['value']))
-    if mq_battAh['value'] >= 0 and pow_con['company']['value'] < 0 and heat_state == 'IDLE':
+    if int(heating['disabled']) == 1:
+        print("calculate: heating disabled, no autostart")
+        return
+            
+    hp_restart_time = 4*heating['COMP_RUNTIME_SHOT']
+    bhkw_restart_time = 4*heating['BHKW_RESTART_TIME']
+    if mq_weather['age'] < 600:
+        print("calculate: outside temp %f" % mq_weather['value'])
+        if mq_weather['value'] < -5:
+            hp_restart_time = heating['COMP_RUNTIME_SHOT']/2
+            bhkw_restart_time = heating['BHKW_RESTART_TIME']
+        elif mq_weather['value'] < 5:
+            hp_restart_time = heating['COMP_RUNTIME_SHOT']
+            bhkw_restart_time = heating['BHKW_RESTART_TIME']
+        elif mq_weather['value'] < 10:
+            hp_restart_time = 2*heating['COMP_RUNTIME_SHOT']
+            bhkw_restart_time = 2*heating['BHKW_RESTART_TIME']
+        elif mq_weather['value'] < 15:
+            hp_restart_time = 3*heating['COMP_RUNTIME_SHOT']
+            bhkw_restart_time = 3*heating['BHKW_RESTART_TIME']
+    else:
+        print("calculate: weather unavailable")
+
+    if mq_battAh['value'] >= 0 and pow_con['company']['power'] < -500 and mq_battCurr['value'] > 0 and mq_battCurr['value'] < 10 and heat_state == 'IDLE' and heating['HEATING_TARGET'] > 20.0: # and time.time() - heating['last_bhkw_run'] > bhkw_restart_time/2:
         do_comp_start_time()
         return
 
-    if time.time() - heating['last_bhkw_run'] > heating['BHKW_RESTART_TIME'] and time.time() - heating['last_hp_run'] > 1000 and mq_battAh['value'] < -60:
-        do_start()
+    if time.time() - heating['last_bhkw_run'] > bhkw_restart_time and time.time() - heating['last_hp_run'] > 1000 and mq_battAh['value'] < -60:
+        if mq_tempIn['age'] > 600:
+                if heating['HEATING_TARGET'] > 20.0:
+                        print("calculate: inside temp not available")
+                        do_start()
+        else:
+                print("calculate: inside temp %f, heating_target %f" % (mq_tempIn['value'], heating['HEATING_TARGET']))
+                if mq_tempIn['value'] < heating['HEATING_TARGET']:
+                        do_start()
+        return
+    if time.time() - heating['last_bhkw_run'] > bhkw_restart_time and mq_battAh['value'] < -240:
+        if mq_tempIn['age'] > 600:
+                if heating['HEATING_TARGET'] > 20.0:
+                        print("calculate: inside temp not available")
+                        do_start()
+        else:
+                print("calculate: inside temp %f, heating_target %f" % (mq_tempIn['value'], heating['HEATING_TARGET']))
+                if mq_tempIn['value'] < heating['HEATING_TARGET']:
+                        do_start()
         return
 
     if heat_state != 'IDLE':
         return
 
-    hp_restart_time = 4*heating['COMP_RUNTIME_SHOT']
-    if mq_weather['age'] < 600:
-        print("calculate: outside temp %f" % mq_weather['value'])
-        if mq_weather['value'] < -5:
-            hp_restart_time = heating['COMP_RUNTIME_SHOT']/2
-        elif mq_weather['value'] < 5:
-            hp_restart_time = heating['COMP_RUNTIME_SHOT']
-        elif mq_weather['value'] < 10:
-            hp_restart_time = 2*heating['COMP_RUNTIME_SHOT']
-        elif mq_weather['value'] < 15:
-            hp_restart_time = 3*heating['COMP_RUNTIME_SHOT']
-    else:
-        print("calculate: weather unavailable")
     if time.time() - heating['last_hp_run'] > hp_restart_time and time.time() - heating['last_bhkw_run'] > hp_restart_time:
         avg_consumption = history_avg(mqtt['emon/solar1/AOactpo_realtime']['history'], 600)
         if  avg_consumption > 1500:
             print("calculate: power usage higher than limit %.0f. Heatpump start delayed." % avg_consumption)
+            return
+        if heating['hp_coef'] <= -2.0:
+            print("calculate: hp_coef too low to start heatpump")
             return
         do_comp_start()
         return
 
 
 client = mqtt_c.Client()
-client.connect('192.168.0.2', 1883, 60)
+#client.connect('192.168.0.2', 1883, 60)
+client.connect('localhost', 1883, 60)
 
 if __name__ == '__main__':
     client.on_connect = on_connect
@@ -604,6 +762,7 @@ if __name__ == '__main__':
     restore_runtime()
     time.sleep(10)
     pow_con['bhkw1']['request_power'] = -pow_con['bhkw1']['power']
+    last_run_timer = 0
     while True:
         try:
             time.sleep(10)
@@ -619,11 +778,21 @@ if __name__ == '__main__':
             else:
                 total = -10000
             print('total: ' + str(total))
+            date = datetime.datetime.now(datetime.timezone.utc)
+            solar_elevation = pysolar.solar.get_altitude(latitude, longitude, date)
+            print("solar elevation: %f" % solar_elevation)
+
+            power_eqtarget = 100
+            if solar_elevation > 10.0:
+                power_eqtarget = 10
+            print("power_eqtarget: %f" % power_eqtarget)
+            
+
             if total < 0:
-                incConsum(100 - total)
+                incConsum(power_eqtarget - total)
             else:
-                if total > 100:
-                    decConsum(total - 100)
+                if total > power_eqtarget:
+                    decConsum(total - power_eqtarget)
             client.publish('emon/bhkw1/request_power', str(int(pow_con['bhkw1']['request_power'])))
             control_machine()
             heat_machine()
@@ -632,11 +801,16 @@ if __name__ == '__main__':
             save_runtime()
             heatpower_compensation()
             calculate()
+            if time.time() > last_run_timer + 3600:
+                last_run_timer = time.time()
+                calculate_hourly()
+        	
 #                print(mqtt)
 
         except Exception as e:
             try:
-                print(str(e))
+#                print(str(e))
+                traceback.print_exc() 
             finally:
                 e = None
                 del e
