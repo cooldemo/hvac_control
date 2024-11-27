@@ -421,16 +421,16 @@ while True:
 		q = q[:-1] + ";"
 
 
-		print (q)
-		try:
-			db = MySQLdb.connect(host="192.168.1.1", user="demo", passwd="aUbBpW7M633NMQLD", db="demo_energo")
-			c = db.cursor()
-			c.execute(q)
-			c.close()
-			db.close()
-		except Exception as e:
-			print(e)
-			print("DB error")
+#		print (q)
+#		try:
+#			db = MySQLdb.connect(host="192.168.1.1", user="demo", passwd="aUbBpW7M633NMQLD", db="demo_energo", connect_timeout = 3)
+#			c = db.cursor()
+#			c.execute(q)
+#			c.close()
+#			db.close()
+#		except Exception as e:
+#			print(e)
+#			print("DB error")
 
 #	postJSON(dic)
 		postMQTT(dic)

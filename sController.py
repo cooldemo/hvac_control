@@ -269,8 +269,14 @@ def heat_machine():
             control_state = 'STOP'
         elif mq['value'] < heating['WATER_TEMP1']:
             next_state = 'WATER_HEATING1'
+            heat_pump_command['comp'] = 0
+            heat_pump_command['pump'] = 1
+            heat_pump_command['valve'] = 1
         else:
             next_state = 'HEATING'
+            heat_pump_command['comp'] = 0
+            heat_pump_command['pump'] = 1
+            heat_pump_command['valve'] = 0
             heat_machine.loop_delay = 10
     elif heat_state == 'START_COMP':
         heat_pump_command['comp'] = 1
@@ -522,7 +528,7 @@ def charger1_charging_start():
 
 def heatpower_compensation():
 
-    heating['heatpower_compensation'] = 0.8 * history_avg(pow_con['bhkw1']['history'], 900) / 2200
+    heating['heatpower_compensation'] = 2.3 * ((history_avg(pow_con['bhkw1']['history'], 900) / 2200) - 1)
     if heating['heatpower_compensation'] < 0.0:
         heating['heatpower_compensation'] = 0.0
 
