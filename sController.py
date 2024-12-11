@@ -247,6 +247,7 @@ def control_machine():
         else:
             next_state = 'BATT_CHARGING'
             solar1_charging_start()
+            control_machine.with_charging = 1
             print("BATT_CHARGING reason: consumption lowered")
     elif control_state == 'BATT_CHARGING':
         heating['last_bhkw_run'] = time.time()
@@ -280,16 +281,20 @@ def control_machine():
             heat_state = 'BHKW_COOLDOWN'
         else:
             next_state = 'IDLE'
-            solar1_charging_stop()
+            if control_machine.with_charging > 0:
+                solar1_charging_stop()
+                control_machine.with_charging = 0
     elif control_state == 'STARTING':
         if pow_con['bhkw1']['power'] < 0:
             if history_min(pow_con['company']['history'], 900) > 2200:
                 next_state = 'STARTING_WAIT_NOTCHARGING'
+                control_machine.with_charging = 0
                 control_machine.loop_delay = 1
             else:
                 next_state = 'STARTING_WAIT'
                 control_machine.loop_delay = 1
                 solar1_charging_start()
+                control_machine.with_charging = 1
         else:
             next_state = 'STARTING'
     elif control_state == 'STARTING_WAIT':
@@ -316,6 +321,7 @@ def control_machine():
 
 
 control_machine.loop_delay = 0
+control_machine.with_charging = 0
 
 
 def heat_machine():
